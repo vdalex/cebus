@@ -1,0 +1,313 @@
+/* 3.2.1 PH_CC_DATA.request
+3.2.1.1 Purpose.
+This service primitive describes the transfer of symbols from the MAC Sublayer to the SE
+Sublayer. As a sequence, these symbols comprise the Data Link Layer frame being
+transmitted. */
+
+/* 3.2.2 PH_CC_DATA.indication
+3.2.2.1 Purpose.
+This service primitive describes the transfer of symbols from the SE Sublayer to the MAC
+Sublayer. As a sequence, the symbols provided by this primitive comprise the Data Link
+Layer frame which is being received from another node. */
+
+/* 3.2.3 PH_CC_DATA.confirm
+3.2.3.1 Purpose.
+This service primitive provides the MAC Sublayer with the result of each
+PH_CC_DATA.request. This service primitive is of local significance only. */
+
+// "SUCCESS", "FAILURE_COLLISION", or "FAILURE_OTHER"
+
+/* 3.2.4 PH_CC_STATUS.indication
+3.2.4.1 Purpose.
+This service primitive provides the MAC Sublayer with SE Sublayer status information. This
+service primitive is an interlayer primitive and is of local significance only. */
+
+// "CHANNEL_QUIET", "CHANNEL_ACTIVE", or "BIT_ERROR"
+
+/* 4.2.1 PH_INITIALIZE_PROTOCOL.request
+4.2.1.1 Purpose.
+The PH_INITIALIZE_PROTOCOL.request primitive is invoked by the Layer System
+Management to reset the SE Sublayer to a known state. Upon receipt, the SE Sublayer goes
+to its POWER-ON state (IDLE State). Once this is accomplished, the SE Sublayer immediately
+responds with a PH_INITIALIZE_PROTOCOL.confirm to indicate the results of the request.
+*/
+
+/* 4.2.2 PH_INITIALIZE_PROTOCOL.confirm
+4.2.2.1 Purpose.
+The PH_INITIALIZE_PROTOCOL.confirm primitive is invoked by the SE Sublayer in response
+to a PH_INITIALIZE_PROTOCOL.request to indicate the success or failure of the initialization. */
+
+boolean PH_INITIALIZE_PROTOCOL() // request
+{
+    Success = FALSE;
+// TBD
+    return Success;     // confirm
+}
+
+/* 4.2.3 PH_SET_VALUE.request
+4.2.3.1 Purpose.
+The PH_SET_VALUE.request primitive is used by the Layer System Management to set the
+value of SE Sublayer variables. */
+void PH_SET_VALUE.req
+
+/* 4.2.4 PH_SET_VALUE.confirm
+4.2.4.1 Purpose.
+The PH_SET_VALUE.confirm primitive is generated in response to a PH_SET_VALUE.request
+primitive to indicate the results of the request. */
+
+/* 4.2.3 PH_READ_VALUE.request
+4.2.3.1 Purpose.
+The PH_READ_VALUE.request primitive is used by the Layer System Management to read the
+value of PL/RF SE Sublayer variables. */
+
+/* 4.2.4 PH_READ_VALUE.confirm
+4.2.4.1 Purpose.
+The PH_READ_VALUE.confirm primitive is generated in response to a
+PH_READ_VALUE.request primitive to indicate the results of the request. */
+
+/* PH_EVENT.indication
+4.2.5.1 Purpose.
+This primitive is used to notify the Layer System Management that a significant event has
+occurred in the SE Sublayer. */
+
+// MEDIUM_RESET and JABBER_RECEIVED
+
+/* Callback */
+
+/* 4.2.6 LSM_EVENT.indication
+4.2.6.1 Purpose.
+This primitive is used to notify the SE Sublayer that a significant event has occurred either in
+the Layer System Management or in another layer. */
+
+// MAC_FAILURE and MAC_RESET
+
+/* 4.2.7 PH_FAILURE_REPORT.indication
+4.2.7.1 Purpose.
+The PH_FAILURE_REPORT.indication service primitive is used to notify the Layer System
+Management of a failure detected by the SE Sublayer. */
+
+/* 5.4.1 SYM
+SYM is a variable containing the current symbol being transmitted. */
+SE_SYMBOL SYM;
+
+/* 5.4.1 SYM_TIME
+The SYM_TIME variable is the defined pulse width (in unit symbol times) for the transmission
+of each symbol. A ONE (1) symbol is 1 unit symbol time, a ZERO (0) symbol is 2 unit symbol
+times, an EOF symbol is 3 unit symbol times, and an EOP symbol is 4 unit symbol times. */
+int SYM_TIME;
+
+/* 5.4.2 SYM_TIMER
+Is the timer function associated with reception and transmission of symbols (and also keeps
+track of elapsed quiet time on the channel for the MAC Sublayer). */
+int SYM_TIMER;
+
+/* 5.2.14 RCVD_STATE
+This variable stores the current state being received. */
+/* 5.4.1 XMIT_STATE
+XMIT_STATE is a variable containing the current medium state (Inferior or Superior) being
+transmitted. */
+MEDIUM_STATE XMIT_STATE,RCVD_STATE;
+
+SE_STATE Se_State
+
+void Idle(event)
+{
+    switch (event)
+    {
+        case SYM_TIMER_EXP
+            PH_CC_STATUS.INDICATION(CH_QUIET)
+            START_SYM_TIMER(1)
+            break
+
+        case M_STATE.INDICATION(SUP)
+            PH_CC_STATUS.INDICATION(CH_ACTIVE)
+            START_SYM_TIMER(4.5)
+            Se_State = RCV_SYM
+            break
+
+        case PH_CC_DATA.REQUEST(SYM)
+            M_STATE.REQUEST(SUP)
+            START_SYM_TIMER(SYM_TIME)
+            Se_State = XMIT_SYM
+            break
+
+        case PH_INITIALIZE_PROTOCOL.REQUEST
+            PH_RESET()
+            PH_INITIALIZE_PROTOCOL.CONFIRM(SUCCESS)
+            START_SYM_TIMER(1)
+            Se_State = IDLE
+            break
+
+        case PH_FAILURE
+            PH_FAILURE_REPORT.INDICATION(PH_FAILURE)
+            Se_State = RESET_WAIT
+            break
+
+        case MEDIUM_FAILURE
+            PH_FAILURE_REPORT.INDICATION(MEDIUM_FAILURE)
+            Se_State = RESET_WAIT
+            break
+
+        default
+    }
+}
+
+void RcvToggle(void)
+{
+    if (SYM_TIMER<0.5)
+        PH_CC_STATUS.INDICATION(BIT_ERROR)
+        START_SYM_TIMER(4.5)
+    else if (SYM_TIMER<1.5)
+        PH_CC_DATA.INDICATION(1)
+        START_SYM_TIMER(4.5)
+    else if (SYM_TIMER<2.5)
+        PH_CC_DATA.INDICATION(0)
+        START_SYM_TIMER(4.5)
+    else if (SYM_TIMER<3.5)
+        PH_CC_DATA.INDICATION(EOF)
+        START_SYM_TIMER(4.5)
+    else if (SYM_TIMER<4.5)
+        PH_CC_DATA.INDICATION(EOP)
+        START_SYM_TIMER(1)
+        Se_State = IDLE
+}
+
+void ReceiveSymbol(event)
+{
+    switch (event)
+    {
+        case M_STATE.INDICATION(SUP)
+            if (RCVD_STATE=INF) RcvToggle()
+            break
+
+        case M_STATE.INDICATION(INF)
+            if (RCVD_STATE=SUP) RcvToggle()
+            break
+
+        case SYM_TIMER_EXP
+            if (RCVD_STATE=SUP)
+                PH_CC_STATUS.INDICATION(BIT_ERROR)
+                START_SYM_TIMER(4.5)
+            else
+                PH_CC_DATA.INDICATION(EOP)
+                START_SYM_TIMER(1)
+                Se_State = IDLE
+            break
+
+        case PH_INITIALIZE_PROTOCOL.REQUEST
+            PH_RESET()
+            PH_INITIALIZE_PROTOCOL.CONFIRM(SUCCESS)
+            START_SYM_TIMER(1)
+            Se_State = IDLE
+            break
+
+        case PH_FAILURE
+            PH_FAILURE_REPORT.INDICATION(PH_FAILURE)
+            Se_State = RESET_WAIT
+            break
+
+        case MEDIUM_FAILURE
+            PH_FAILURE_REPORT.INDICATION(MEDIUM_FAILURE)
+            Se_State = RESET_WAIT
+            break
+
+        default
+    }
+}
+
+void TransmitSymbol(event)
+{
+    switch (event)
+    {
+        case SYM_TIMER_EXP
+            if (SYM=EOP)
+                PH_CC_DATA.CONFIRM(SUCCESS)
+                if (XMIT_STATE=SUP) M_STATE.REQUEST(INF)
+                START_SYM_TIMER(1)
+                Se_State = IDLE
+            else
+                PH_CC_DATA.CONFIRM(SUCCESS)
+            break
+
+        case PH_CC_DATA.REQUEST(SYM)
+            M_STATE.REQUEST(TOG)
+            START_SYM_TIMER(SYM_TIME)
+            Se_State = XMIT_SYM
+            break
+
+        case M_STATE.INDICATION(SUP)
+            if (NOT(SYM_TIMER_EXP) and XMIT_STATE=INF)
+                PH_CC_DATA.CONFIRM(FAIL_COLL)
+                START_SYM_TIMER(4.5)
+                Se_State = RCV_SYM
+            break
+
+        case PH_INITIALIZE_PROTOCOL.REQUEST
+            PH_RESET()
+            PH_INITIALIZE_PROTOCOL.CONFIRM(SUCCESS)
+            START_SYM_TIMER(1)
+            Se_State = IDLE
+            break
+
+        case PH_FAILURE
+            PH_FAILURE_REPORT.INDICATION(PH_FAILURE)
+            Se_State = RESET_WAIT
+            break
+
+        case MEDIUM_FAILURE
+            PH_FAILURE_REPORT.INDICATION(MEDIUM_FAILURE)
+            if (NOT(SYM_TIMER_EXP)) PH_CC_DATA.CONFIRM(FAIL_OTHER)
+            Se_State = RESET_WAIT
+            break
+
+        default
+    }
+}
+
+void ResetWait(event)
+{
+    switch (event)
+    {
+        case PH_INITIALIZE_PROTOCOL.REQUEST
+            PH_RESET()
+            PH_INITIALIZE_PROTOCOL.CONFIRM(SUCCESS)
+            START_SYM_TIMER(1)
+            Se_State = IDLE
+            break
+
+        case PH_FAILURE
+        case MEDIUM_FAILURE
+            break
+
+        case MEDIUM_RESET
+            if (MEDIUM_FAILURE = TRUE)
+            PH_EVENT.INDICATION(MEDIUM_RESET)
+            break
+
+        default
+    }
+}
+
+void SE_loop(void)
+{
+    switch (Se_State)
+    {
+        event = GetEvent()
+
+        case IDLE
+            Idle(event)
+            break
+        case XMIT_SYM
+            TransmitSymbol(event)
+            break
+        case RCV_SYM
+            ReceiveSymbol(event)
+            break
+        case RESET_WAIT
+            Reset_Wait(event)
+            break
+        default
+    }
+}
+
+

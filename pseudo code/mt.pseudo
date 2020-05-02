@@ -1,0 +1,194 @@
+void Idle(event)
+{
+    switch (event)
+    {
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+        case LSM_EVENT.indication(MAC_FAILURE)
+        case LSM_EVENT.indication(LLC_FAILURE)
+        case LSM_EVENT.indication(NL_FAILURE)
+        case LSM_EVENT.indication(CAL_FAILURE)
+            break
+
+        case LSM_EVENT.indication(Medium_Reset)
+            if (Medium_Failure)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT.indication(PH_Reset)
+            if (PH_Failure)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(MAC_RESET)
+            if (MAC_FAILURE)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(LLC_RESET)
+            if (LLC_FAILURE)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(NL_RESET)
+            if (NL_FAILURE)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(CAL_RESET)
+            if (CAL_FAILURE)
+                MT_State = IDLE
+            break
+
+        case MT_INIT_PROTOCOL.request
+            Reset_MT()
+            MT_INIT_PROTOCOL.confirm(SUCCESS)
+            MT_State = IDLE
+            break
+        default
+    }
+}
+
+void ProcessNDataConfirm(Value)
+{
+    if (RESPONSE_QUEUED > 0)
+        RESPONSE_QUEUED := RESPONSE_QUEUED-1
+        BUILD_APDU
+        N_DATA.REQUEST
+    else
+        switch(Value)
+        {
+            case RESULT
+                MT_RESULT.CONFIRM
+                MT_State = IDLE
+                break
+
+            case MT_REJECT
+            case RECEIPT_ACK
+                MT_State = IDLE
+                break
+
+            case IMPLICIT
+                MT_INVOKE.CONFIRM
+                RELEASE_SOURCE_ASSOCIATION
+                MT_State = IDLE
+                break
+
+/* TODO */
+
+        }
+}
+
+void Con_Wait(event)
+{
+    switch (event)
+    {
+        case N_DATA.CONFIRM(Value)
+            ProcessNDataConfirm(Value)
+            break
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+        case LSM_EVENT.indication(MAC_FAILURE)
+        case LSM_EVENT.indication(LLC_FAILURE)
+        case LSM_EVENT.indication(NL_FAILURE)
+        case LSM_EVENT.indication(CAL_FAILURE)
+            MT_* CONFIRM (FAILURE_OTHER)
+            MT_State = RESET_WAIT
+            break
+
+        case CAL_FAILURE
+            MT_FAILURE_REPORT.INDICATION(CAL_FAILURE)
+            MT_*.CONFIRM(FAILURE_OTHER)
+            break
+
+        case MT_FAILURE
+            MT_FAILURE_REPORT.INDICATION(MT_FAILURE)
+            MT_State = RESET_WAIT
+            break
+
+        case MT_INIT_PROTOCOL.request
+            Reset_MT()
+            MT_INIT_PROTOCOL.confirm(SUCCESS)
+            MT_State = IDLE
+            break
+        default
+    }
+}
+
+/* Note that when there exists a combination of failure conditions (MEDIUM_FAILURE,
+PH_FAILURE, MAC_FAILURE, LLC_FAILURE, NL_FAILURE, and/or CAL_FAILURE), all
+conditions must be corrected before returning to the IDLE State. Also note that
+any other actions occur (requests, indications, confirms, timer expirations) are
+ignored (i.e., no action is taken and remain in the RESET_WAIT state. */
+
+void Reset_Wait(event)
+{
+    switch (event)
+    {
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+        case LSM_EVENT.indication(MAC_FAILURE)
+        case LSM_EVENT.indication(LLC_FAILURE)
+        case LSM_EVENT.indication(NL_FAILURE)
+        case LSM_EVENT.indication(CAL_FAILURE)
+            break
+
+        case LSM_EVENT.indication(Medium_Reset)
+            if (Medium_Failure)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT.indication(PH_Reset)
+            if (PH_Failure)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(MAC_RESET)
+            if (MAC_FAILURE)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(LLC_RESET)
+            if (LLC_FAILURE)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(NL_RESET)
+            if (NL_FAILURE)
+                MT_State = IDLE
+            break
+
+        case LSM_EVENT. INDICATION(CAL_RESET)
+            if (CAL_FAILURE)
+                MT_State = IDLE
+            break
+
+        case MT_INIT_PROTOCOL.request
+            Reset_MT()
+            MT_INIT_PROTOCOL.confirm(SUCCESS)
+            MT_State = IDLE
+            break
+
+        default
+    }
+}
+
+void MT_loop(void)
+{
+    switch (MT_State)
+    {
+        event = GetEvent()
+
+        case IDLE
+            Idle(event)
+            break
+        case CON_WAIT
+            Con_Wait(event)
+            break
+        case RESET_WAIT
+            Reset_Wait(event)
+            break
+        default
+    }
+}

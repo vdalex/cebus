@@ -1,0 +1,888 @@
+void BeginTransmit()
+{
+    Assemble_Normal_Frame()
+    Restart_Retrans_Timer
+    Compute_FCS
+    Create_Preamble
+    Restart_Count = 1
+    Get_Next_Sym(Sym)
+    PH_CC_DATA.request(Sym)
+}
+
+void Idle(event)
+{
+    switch (event)
+    {
+        case PH_CC_STATUS.indication(CH_QUIET)
+            break
+
+        case PH_CC_STATUS.indication(CH_ACTIVE)
+            MACS_State = RCV
+            break
+
+        case MA_DATA.request
+            if Local_Busy
+                Result = FAILURE_LOCAL_BUSY
+                MA_DATA.confirm
+            else
+                BeginTransmit()
+                MACS_State = XMIT
+            break
+
+        case MA_ACK_DATA.request
+            if Local_Busy
+                Result = FAILURE_LOCAL_BUSY
+                MA_ACK_DATA.confirm
+            else
+                BeginTransmit()
+                MACS_State = XMIT
+            break
+
+        case No_CH_QUIET_Sent
+            MA_FAILURE_REPORT.indication(PH_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case MAC_Failure
+            MA_FAILURE_REPORT.indication(MAC_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case MA_INIT_PROTOCOL.request
+            Reset_MAC()
+            MA_INIT_PROTOCOL.confirm(SUCCESS)
+            break
+
+        default
+    }
+}
+
+void QueueTransmit(void)
+{
+    Save_Current_Frame
+    Pending_XMIT = TRUE
+    if (Quiet >= Min/Priority/Queue/Busy_Wait)
+        Queued = FALSE
+    if (Busy_Wait > 0)
+        Busy_Wait = Busy_Wait -1
+    MACS_State = RCV
+}
+
+void RequestHigherPriority()
+{
+    Result = FAILURE_PRIORITY
+    if (XMIT_Type = UNACK_DATA OR ADR_UNACK_DATA) Then
+        MA_DATA.confirm
+    else (* XMIT_Type = ACK_DATA, ADR_ACK_DATA *)
+        MA_ACK_DATA.confirm
+    Good_XMIT_Count = 0
+    Restart_Count = 0
+    Retry_Count = 0
+    Busy_Wait = 0
+    Assemble_Normal_Frame
+    Compute_FCS
+    Create_Preamble
+    Pending_XMIT = TRUE
+    Reset_Retrans_Timer
+}
+
+void TransmitWait(event)
+{
+    switch (event)
+    {
+        case PH_CC_STATUS.indication(CH_QUIET)
+            if (Quiet < Wait_Time)
+                Quiet = Quiet + 1
+            else
+                Get_Next_Sym(Sym)
+                PH_CC_DATA.request(Sym)
+                MACS_State = XMIT
+            break
+
+        case PH_CC_STATUS.indication(CH_ACTIVE)
+            switch (XMIT_Type)
+            {
+                case UNACK_DATA
+                case ACK_DATA
+                    if (Restart_Count < MAX_RESTART)
+                        QueueTransmit()
+                    else
+                        Result = FAILURE_EXCESSIVE_COLLISION
+                        if (XMIT_Type = UNACK_DATA) MA_DATA.confirm;
+                        else MA_ACK_DATA.confirm
+                        Busy_Wait = 0
+                        Restart_Count = 0
+                        if (Quiet >= Min/Priority/Queue/Busy_Wait) Queued = FALSE;
+                        MACS_State = RCV
+                    break
+
+                case ADR_UNACK_DATA
+                case ADR_ACK_DATA
+                    QueueTransmit()
+                    break
+            }
+            break
+
+        case MA_DATA.request Higher_Priority
+        case MA_ACK_DATA.request Higher_Priority
+            RequestHigherPriority()
+            MACS_State = IDLE_WAIT
+            break
+
+        case Retrans_Time_Expired
+            if (XMIT_Type = ADR_UNACK_DATA)
+                if (Good_XMIT_Count >= 1)
+                    Result = SUCCESS
+                else (* Good_XMIT_Count < 1 *)
+                    Result = FAILURE_EXCESSIVE_COLLISIONS;
+                MA_DATA.confirm;
+
+            else (* XMIT_Type = ADR_ACK_DATA *)
+                Result = FAILURE_EXCESSIVE_COLLISIONS
+                MA_ACK_DATA.confirm
+
+            Wait_Time = CA_WAIT_TIME - Quiet
+            Ack_Service = NONE
+            Good_XMIT_Count = 0
+            Restart_Count = 0
+            Retry_Count = 0
+            Busy_Wait = 0
+
+            MACS_State = IDLE_WAIT
+            break
+
+        case No_CH_QUIET_Sent
+            MA_FAILURE_REPORT.indication(PH_FAILURE)
+            Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+TransmitFailureCommonCode:
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+            Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+        case MAC_Failure
+            MA_FAILURE_REPORT.indication(MAC_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case MA_INIT_PROTOCOL.request
+            Reset_MAC()
+            MA_INIT_PROTOCOL.confirm(SUCCESS)
+            MACS_State = IDLE
+            break
+
+        default
+    }
+}
+
+void AckServiceNoneAction()
+{
+    Queued = TRUE
+    Restart_Count = 0
+    Wait_Time = 6
+    Quiet = 1
+    Save_Current_Frame
+    Ack_Service = SOURCE
+    MACS_State = AS_WAIT
+}
+
+void AckServiceSourceAction()
+{
+    Retry_Count = Retry_Count + 1
+    Wait_Time = 10
+    Quiet = 1
+    MACS_State = AS_WAIT
+}
+
+void AckServiceIackFailDestAction()
+{
+    Wait_Time = 10
+    Quiet = 1
+    MACS_State = AS_WAIT
+}
+
+void XmitConfirmSuccess()
+{
+    if not(Sym = EOP)
+        Get_Next_Sym(Sym)
+        PH_CC_DATA.request(Sym)
+        MACS_State = XMIT
+    else
+        switch (XMIT_Type)
+        {
+            case UNACK_DATA
+                Result = SUCCESS
+                MA_DATA.confirm
+                Wait_Time = CA_WAIT_TIME
+                Queued = TRUE
+                Restart_Count = 0
+                Quiet = 1
+                MACS_State = IDLE_WAIT
+                break
+
+            case ADR_UNACK_DATA
+                Good_XMIT_Count = Good_XMIT_Count + 1
+                Queued = TRUE
+                Restart_Count = 0
+                Quiet = 1
+                if (Good_XMIT_Count < CH_Access_Num)
+                    Save_Current_Frame
+                    Pending_XMIT = TRUE
+                else /* Good_XMIT_Count >= CH_Access_Num */
+                    Result = SUCCESS
+                    MA_DATA.confirm
+                    Good_XMIT_Count = 0
+                    Wait_Time = CA_WAIT_TIME
+                MACS_State = IDLE_WAIT
+                break
+
+            case ACK_DATA
+                switch (Ack_Service)
+                {
+                    case NONE
+                        AckServiceNoneAction()
+                        break
+
+                    case SOURCE
+                        AckServiceSourceAction()
+                        break
+
+                    default
+                }
+
+            case ADR_ACK_DATA
+                switch (Ack_Service)
+                {
+                    case NONE
+                        AckServiceNoneAction()
+                        break
+
+                    case SOURCE
+                        AckServiceSourceAction()
+                        break
+
+                    case DESTINATION
+                        AckServiceIackFailDestAction()
+                        break
+
+                    default
+                }
+
+            case IACK
+            case FAILURE
+                if (Ack_Service = DESTINATION)
+                    AckServiceIackFailDestAction()
+                break
+
+            default
+        }
+}
+
+void SaveFrame()
+{
+    Save_Current_Frame
+    Pending_XMIT = TRUE
+    Queued = FALSE
+    if (Busy_Wait > 0)
+        Busy_Wait = Busy_Wait - 1
+    MACS_State = RCV
+}
+
+void XmitFailureCollision()
+{
+    switch (Ack_Service)
+    {
+        case NONE
+            switch (XMIT_Type)
+            {
+                case UNACK_DATA
+                case ACK_DATA
+                    if (Restart_Count < MAX_RESTART)
+                        SaveFrame()
+                    else
+                        Result = FAILURE_EXCESSIVE_COLLISION;
+                        if (XMIT_Type = UNACK_DATA)
+                            MA_DATA.confirm;
+                        else (* XMIT_Type = ACK_DATA *)
+                            MA_ACK_DATA.confirm
+                        Busy_Wait = 0
+                        Restart_Count = 0
+                        Queued = FALSE
+                        MACS_State = RCV
+                    break
+
+                case ADR_UNACK_DATA
+                case ADR_ACK_DATA
+                    SaveFrame()
+                    break
+                default
+            }
+
+        case SOURCE
+            Retry_Backoff = TRUE
+            MACS_State = RCV
+            break
+
+        case DESTINATION
+            /* No Action - Continue to transmit an IACK, Failure Packet, or Addressed IACK */
+            MACS_State = XMIT
+            break
+        default
+    }
+}
+
+void Transmit(event)
+{
+    switch (event)
+    {
+        case PH_CC_DATA.confirm(SUCCESS)
+            XmitConfirmSuccess()
+            break
+
+        case PH_CC_DATA.confirm(FAILURE_COLLISION)
+            XmitFailureCollision()
+            break
+
+/* The events MA_DATA.request and MA_ACK_DATA.request may occur during the transmission
+of an IACK. The frame may be encoded and marked as a pending frame, but the current
+transmission cannot be interrupted.
+
+A Higher Priority MA_DATA.request or MA_ACK_DATA.request may occur during the XMIT State.
+The frame may be encoded and marked as a pending frame, but the current transmission
+cannot be interrupted.
+
+The event Pending_XMIT may be true during the XMIT State (in the case that a requested
+frame is pending during the transmission of an IACK or a normal frame already in progress).
+However, Pending_XMIT is not an event/condition that needs to be serviced during the
+XMIT State. */
+
+        case PH_CC_DATA.confirm(FAILURE_OTHER)
+            Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            Restart_Count = 0
+            Wait_Time = CA_WAIT_TIME
+            Quiet = 1
+            MACS_State = IDLE_WAIT
+            break
+
+        case No_PH_Confirm_Sent
+            MA_FAILURE_REPORT.indication(PH_FAILURE)
+            Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+TransmitFailureCommonCode:
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+            Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+        case MAC_Failure
+            MA_FAILURE_REPORT.indication(MAC_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case MA_INIT_PROTOCOL.request
+            Reset_MAC()
+            MA_INIT_PROTOCOL.confirm(SUCCESS)
+            MACS_State = IDLE
+            break
+
+        default
+    }
+}
+
+void As_Wait(event)
+{
+    switch (event)
+    {
+        case PH_CC_STATUS.indication(CH_ACTIVE)
+            MACS_State = RCV
+            break
+
+        case PH_CC_STATUS.indication(CH_QUIET)
+            if (Quiet < Wait_Time)
+                Quiet = Quiet + 1
+            else /* Quiet >= Wait_Time */
+                switch (Ack_Service)
+                {
+                    case SOURCE
+                        if (Retry_Count < Num_Retries)
+                            Get_Next_Sym(Sym)
+                            PH_CC_DATA.request(Sym)
+                            MACS_State = XMIT
+                        else
+                            switch (XMIT_Type)
+                            {
+                                case ADR_ACK_DATA
+                                    Save_Current_Frame
+                                    Pending_Xmit = TRUE
+                                    if (Busy_Wait > 0) Then
+                                        Busy_Wait = Busy_Wait - 1
+                                    Retry_Count = 0;
+                                    Ack_Service = NONE;
+                                    MACS_State = IDLE_WAIT
+                                    break
+
+                                case ACK_DATA
+                                    Result = FAILURE_NO_ACKNOWLEDGE
+                                    MA_ACK_DATA.confirm
+                                    Busy_Wait = 0
+                                    Wait_Time = CA_WAIT_TIME - Quiet
+                                    Retry_Count = 0
+                                    Ack_Service = NONE
+                                    MACS_State = IDLE_WAIT
+                                    break
+
+                                default
+                            }
+                        break
+
+                    case DESTINATION
+                        Ack_Service = NONE
+                        Wait_Time = CA_WAIT_TIME - Quiet
+                        MACS_State = IDLE_WAIT
+                        break
+
+                    default
+                }
+            break
+
+        case Retrans_Timer_Expired
+            if (XMIT_Type = ADR_ACK_DATA) and (Ack_Service = SOURCE)
+                Result = FAILURE_NO_ACKNOWLEDGE
+                MA_ACK_DATA.confirm
+                Busy_Wait = 0
+                Wait_Time = CA_WAIT_TIME - Quiet
+                Good_XMIT_Count = 0
+                Retry_Count = 0
+                Ack_Service = NONE
+                MACS_State = IDLE_WAIT
+            break
+
+/* The events MA_DATA.request and MA_ACK_DATA.request may occur when Ack_Service
+ = Destination during the AS_WAIT State. The frame may be encoded and marked as
+ a pending frame, but the current Ack_Service transmission cannot be interrupted.
+A Higher Priority MA_DATA.request or MA_ACK_DATA.request may occur during the
+AS_WAIT State. Any frames which are already pending must be discarded. The frame
+may be encoded and marked as a pending frame, but the Ack_Service transmission
+cannot be interrupted.
+The event Pending_XMIT may be true during the AS_Wait State. However, Pending_XMIT
+does not interrupt an Ack_Service transmission and, therefore, is not an
+event/condition that needs to be serviced during the AS_Wait State. */
+
+        case No_CH_QUIET_Sent
+            MA_FAILURE_REPORT.indication(PH_FAILURE)
+            if ((Ack_Service = SOURCE) OR (Pending_Xmit = TRUE))
+                Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+            if ((Ack_Service = SOURCE) OR (Pending_Xmit = TRUE))
+                Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+        case MAC_Failure
+            MA_FAILURE_REPORT.indication(MAC_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case MA_INIT_PROTOCOL.request
+            Reset_MAC()
+            MA_INIT_PROTOCOL.confirm(SUCCESS)
+            MACS_State = IDLE
+            break
+
+        default
+    }
+}
+
+void ProcessReceivedFrame()
+{
+/* Process received frame */
+    if ( (Ack_Service = NONE) OR (Ack_Service = DESTINATION) )
+        if ( (Not Good_Frame) OR
+            (Good_Frame AND (Not Address_Match) OR
+            (Good_Frame AND (RCV_Type = IACK, FAILURE, OR ADR_IACK) )
+        {
+            Discard_Frame
+            Ack_Service = NONE
+            Wait_Time = CA_WAIT_TIME - Quiet
+                /* CA_WAIT_TIME = 26 */
+            MACS_State = IDLE_WAIT
+        }
+        else if ( Good_Frame AND Address_Match AND (RCV_Type = UNACK) )
+        {
+            MA_DATA.indication
+            Ack_Service = NONE
+            Wait_Time = CA_WAIT_TIME
+            MACS_State = IDLE_WAIT
+        }
+        else if ( Good_Frame AND Address_Match AND (RCV_Type = ADR_UNACK) )
+        {
+            Check for Duplicate
+            if Duplicate
+                Discard_Frame
+            else
+            {
+                Update Sequence_Number/Address List
+                MA_DATA.indication
+            }
+            Ack_Service = NONE
+            Wait_Time = CA_WAIT_TIME
+            MACS_State = IDLE_WAIT
+        }
+        else if ( Good_Frame AND Address_Match AND (RCV_Type = ACK_DATA OR ADR_ACK_DATA) )
+        {
+            Check for duplicate;
+            if Duplicate
+            {
+                Discard_Frame
+                if (RCV_Type = ACK_DATA)
+                    Assemble_Ack_Frame (IACK)
+                else /* RCV_Type = ADR_ACK_DATA */
+                    Assemble_Ack_Frame ( ADR_IACK (SUCCESS) );
+            }
+            else /* Not a duplicate */
+            {
+                if (RCV_Assoc_List_Full OR Other Local_Busy Condition)
+                    /* Receiving MAC cannot accept received frame */
+                    if (RCV_Type = ACK_DATA)
+                        Assemble_Ack_Frame ( FAILURE (REMOTE_BUSY) )
+                    else /* RCV_Type = ADR_ACK_DATA */
+                        Assemble_Ack_Frame(ADR_IACK(FAIL_REMOTE_BUSY) )
+                else if (MAC cannot accept received frame for other reason)
+                    if (RCV_Type = ACK_DATA)
+                        Assemble_Ack_Frame ( FAILURE (REMOTE_REJECT) )
+                    else /* RCV_Type = ADR_ACK_DATA */
+                        Assemble_Ack_Frame(ADR_IACK(FAIL_REMOTE_REJECT))
+                else /* Receiving MAC can accept reveived frame */
+                    if (RCV_Type = ACK_DATA)
+                        Assemble_Ack_Frame (IACK)
+                    else /* RCV_Type = ADR_ACK_DATA */
+                        Assemble_Ack_Frame ( ADR_IACK (SUCCESS) );
+                    if (Ack_Service = NONE)
+                        Ack_Service = DESTINATION;
+                        /* Otherwise, Ack_Service is already DESTINATION */
+                    Update Sequence_Number/Address_List;
+                    MA_ACK_DATA.indication;
+            }
+            Get_Next_Sym(Sym);
+            PH_CC_DATA.request(Sym);
+            MACS_State = XMIT; /* To Transmit Acknowledgment Frame */
+        }
+        else (Ack_Service = SOURCE)  /* Expecting an IACK, FAILURE packet, or Addressed IACK */
+            if (Not Good_Frame)  /* Received Noise, Bad IACK, Bad Failure Packet, Bad Addressed IACK, or Bad Frame */
+                if ((Retry_Count < Num_Retries) AND (Not Retry_Backoff))
+                {
+                    Discard_Frame;
+                    Get_Next_Sym (Sym);
+                    PH_CC_DATA.request(Sym);
+                    MACS_State = XMIT; /* To transmit an immediate retry */
+                }
+                else
+                { /* Other cases of bad received frame */
+                    if (Good_XMIT_Count < CH_Access_Num)
+                    {
+                        Save_Current_Frame;
+                        Pending_Xmit = TRUE;
+                        if (Busy_Wait > 0)
+                            Busy_Wait = Busy_Wait - 1;
+                    }
+                    else /* Good_XMIT_Count >= CH_Access_Num */
+                    {
+                        if ( (Retry_Count < Num_Retries) AND (Retry_Backoff) )
+                            Result = FAILURE_OTHER
+                        else /* Retry_Count = Num_Retries */
+                            Result = FAILURE_NO_ACKNOWLEDGE;
+                        MA_ACK_DATA.confirm;
+                        Good_XMIT_Count = 0;
+                        Wait_Time = CA_WAIT_TIME;
+                        Busy_Wait = 0;
+                    }
+                    Discard_Frame
+                    Retry_Count = 0;
+                    Retry_Backoff = FALSE;
+                    Quiet = 1;
+                    Ack_Service = NONE;
+                    MACS_State = IDLE_WAIT;
+                } /* Cases for received Bad frame */
+            /* Ack_Service = SOURCE --- Expecting an IACK, FAILURE packet, or Addressed IACK */
+            else /* Received Good_Frame */
+            {
+                if (RCV_Type = IACK OR (ADR_IACK(SUCCESS) AND Address_Match) )
+                {
+                    Result = SUCCESS
+                    MA_ACK_DATA.confirm
+                    Discard_Frame
+                    Good_XMIT_Count = 0
+                    Wait_Time = CA_WAIT_TIME
+                    Busy_Wait = 0
+                }
+                else if (RCV_Type = FAILURE(REMOTE_REJECT) OR
+                (ADR_IACK(REMOTE_REJECT) AND Address_Match) )
+                {
+                    Result = FAILURE_REMOTE_REJECT
+                    MA_ACK_DATA.confirm
+                    Discard_Frame
+                    Good_XMIT_Count = 0
+                    Wait_Time = CA_WAIT_TIME
+                    Busy_Wait = 0
+                }
+                else if (RCV_Type = FAILURE(REMOTE_BUSY) OR
+                (ADR_IACK(REMOTE_BUSY) AND Address_Match) )
+                    if (Good_XMIT_Count < CH_Access_Num)
+                    {
+                        Busy_Wait = 12
+                        Save_Current_Frame
+                        Pending_Xmit = TRUE
+                    }
+                    else /* Good_XMIT_Count >= CH_Access_Num */
+                    {
+                        Result = FAILURE_NO_ACKNOWLEDGE
+                        MA_ACK_DATA.confirm
+                        Discard_Frame
+                        Busy_Wait = 0
+                        Good_XMIT_Count = 0
+                        Wait_Time = CA_WAIT_TIME
+                    }
+                else /* RCV_Type = UNACK_DATA, ACK_DATA, ADR_UNACK_DATA,
+                ADR_ACK_DATA, OR ADR_IACK/Not_Address_Match
+                - Another node talked out of turn */
+                {
+                    Result = FAILURE_NO_ACKNOWLEDGE
+                    MA_ACK_DATA.confirm
+                    Discard_Frame
+                    Busy_Wait = 0
+                    Good_XMIT_Count = 0
+                    Wait_Time = CA_WAIT_TIME
+                }
+                Retry_Count = 0
+                Retry_Backoff = FALSE
+                Quiet = 1
+                Ack_Service = NONE
+                MACS_State = IDLE_WAIT
+            } /* Received Good_Frame */
+} /* Process Received Frame */
+
+void Receive(event)
+{
+    switch (event)
+    {
+        /* *** For Symbol Encoding Sublayers other than PL and RF: */
+        case PH_CC_STATUS.indication(BIT_ERROR)
+            Discard_Frame
+            /* Begin receiving next frame */
+            break
+
+/* The events MA_DATA.request and MA_ACK_DATA.request may occur during the RCV
+State. The frame may be encoded and marked as a pending frame, but the current
+reception cannot be interrupted. A Higher Priority MA_DATA.request or
+MA_ACK_DATA.request may occur during RCV State. Any frames already pending must
+be discarded. The frame may be encoded and marked as a pending frame, but the
+current reception cannot be interrupted. The event Pending_XMIT may be true
+during the RCV State. However, Pending_XMIT is not an event/condition that
+needs to be serviced during the RCV State. */
+
+        case PH_CC_DATA.indication
+            if (Sym = EOP)
+                ProcessReceivedFrame()
+            else
+                Save_Symbol(Sym)
+                if (Sym = First EOF Symbol)
+                    Quiet := 1
+            break
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+            if (Pending_Xmit = TRUE)
+                Result = FAILURE_OTHER
+                MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+        case MAC_Failure
+            MA_FAILURE_REPORT.indication(MAC_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case MA_INIT_PROTOCOL.request
+            Reset_MAC()
+            MA_INIT_PROTOCOL.confirm(SUCCESS)
+            MACS_State = IDLE
+            break
+
+        default
+    }
+}
+
+void DataRequest()
+{
+    if (Local_Busy)
+        Result := FAILURE_LOCAL_BUSY
+        MA_DATA.confirm/MA_ACK_DATA.confirm
+        Restart_Count := 0
+        Wait_Time := CA_WAIT_TIME - Quiet
+        MACS_State = IDLE_WAIT
+    else
+        Assemble_Normal_Frame
+        Reset_RETRANS_TIMER
+        Compute_FCS
+        Create_Preamble
+
+        Set Min/Priority/Queue/Busy_Wait
+        Set Random_Wait
+        Wait_Time := Min/Priority/Queue/Busy_Wait + Random_Wait - Quiet
+        Restart_Count := 1
+        MACS_State = XMIT_WAIT
+}
+
+void Idle_Wait(event)
+{
+    switch (event)
+    {
+        case PH_CC_STATUS.indication(CH_QUIET)
+            if (Quiet >= Wait_Time)
+                Queued := FALSE
+                MACS_State = IDLE
+            else
+                Quiet := Quiet + 1
+            break
+
+        case PH_CC_STATUS.indication(CH_ACTIVE)
+            MACS_State = RCV
+            break
+
+        case Pending_XMIT
+            if (Local_Busy)
+                Result := FAILURE_LOCAL_BUSY
+                MA_DATA.confirm/MA_ACK_DATA.confirm
+                Restart_Count := 0
+                Pending_XMIT := FALSE
+                Wait_Time := CA_WAIT_TIME - Quiet
+            else
+                Restart_Count := Restart_Count + 1
+                Pending_XMIT := FALSE
+
+                Set_Min/Priority/Queue/Busy_Wait
+                Set_Random_Wait
+                Wait_Time := Min/Priority/Queue/Busy_Wait + Random_Wait - Quiet
+                MACS_State = XMIT_WAIT
+            break
+
+        case MA_DATA.request
+        case MA_ACK_DATA.request
+            DataRequest()
+            break
+
+        case No_CH_QUIET_Sent
+            MA_FAILURE_REPORT.indication(PH_FAILURE)
+            if (Pending_Xmit = TRUE)
+                Result = FAILURE_OTHER
+            MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+            if (Pending_Xmit = TRUE)
+                Result = FAILURE_OTHER
+                MA_DATA.confirm/MA_ACK_DATA.confirm
+            MACS_State = RESET_WAIT
+            break
+
+        case MAC_Failure
+            MA_FAILURE_REPORT.indication(MAC_FAILURE)
+            MACS_State = RESET_WAIT
+            break
+
+        case MA_INIT_PROTOCOL.request
+            Reset_MAC()
+            MA_INIT_PROTOCOL.confirm(SUCCESS)
+            MACS_State = IDLE
+            break
+
+        default
+    }
+}
+
+void Reset_Wait(event)
+{
+    switch (event)
+    {
+
+        case LSM_EVENT.indication(Medium_FAILURE)
+        case LSM_EVENT.indication(PH_FAILURE)
+            break
+
+        case LSM_EVENT.indication(Medium_Reset)
+            if (Medium_Failure)
+                MACS_State = IDLE
+            break
+
+        case LSM_EVENT.indication(PH_Reset)
+            if (PH_Failure)
+                MACS_State = IDLE
+            break
+
+        case MA_INIT_PROTOCOL.request
+            Reset_MAC()
+            MA_INIT_PROTOCOL.confirm(SUCCESS)
+            MACS_State = IDLE
+            break
+
+        default
+    }
+}
+
+void MACS_loop(void)
+{
+    switch (MACS_State)
+    {
+        event = GetEvent()
+
+        case IDLE
+            Idle(event)
+            break
+        case XMIT_WAIT
+            TransmitWait(event)
+            break
+        case XMIT
+            Transmit(event)
+            break
+        case AS_WAIT
+            As_Wait(event)
+            break
+        case RCV
+            Receive(event)
+            break
+        case IDLE_WAIT
+            Idle_Wait(event)
+            break
+        case RESET_WAIT
+            Reset_Wait(event)
+            break
+        default
+    }
+}

@@ -1,0 +1,7 @@
+CEBus-chirp.txt				The power line chirp: 360 floating point values from the specifications
+CEBus-chirp.wav				How it sounds like (slowed to audio range)
+CEBus-chirp-asm.txt			chirp table for an 8-bit DAC
+CEBus-output.ods			serial bitstream calculation to output a PWM CEBus chirp
+CEBus-output-modulation.asm		serial bitstream in assembler, filter with lowpass 1.39k,1nF
+CEBus-chirp.ods				Spreadsheet calculations
+CEBus-chirp-correlation.ods		Correlation waveform calculation
